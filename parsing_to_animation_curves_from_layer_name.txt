@@ -1,0 +1,33 @@
+1. Getting curves root name:  
+
+MString strLayerRotationNode = argObjName + ROTATEALIAS + argLayerName;
+selList.clear();
+selList.add(strLayerRotationNode);
+MObject depNodeRotation;
+selList.getDependNode(0,depNodeRotation);
+
+2. Getting array of connection (attibutes):
+MPlugArray animLayerPlugs;
+MFnDependencyNode(depNodeRotation).getConnections(animLayerPlugs);
+
+3. Picking only those connections that are isDistanation();
+4. getting plugs for these connections (which are attributes of another node)
+5. Getting this node ling:
+if (animLayerPlugs[i].isDestination())
+{
+MPlug plugOut = animLayerPlugs[i].sourceWithConversion();
+MObject nodePlugOut = plugOut.node();
+}
+
+6. Getting animCurve out of this node:
+MFnAnimCurve animCurve_1 (nodePlugOut);
+
+
+* animation layer controll is a different node:
+
+selList.clear();
+selList.add(argLayerName);  // string
+stat = selList.getDependNode(0, nodeAnimLayerSettings);  //node from the name
+MPlug muteAttrPlug = nodeAnimLayerSettings.findPlug("mute");
+muteAttrPlug.setDouble(1.0);
+
