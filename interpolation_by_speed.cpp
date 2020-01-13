@@ -311,7 +311,59 @@ void interpolationBySpeed::rotate( MDagPath dp )
 
 MStatus interpolationBySpeed::initDataFromMaya(const MArgList& argList)
 {
-	// ---------Reading Command Arguments to Strings: --------------------------------------------
+	if (MS::kSuccess !=  processing_arg_list(argList))	return MS::kFailure;
+	if (MS::kSuccess != get_obj_transform_node())		return MS::kFailure;
+	if (MS::kSuccess != get_anim_layer_ctrl_node())		return MS::kFailure;
+	if (MS::kSuccess != get_anim_layer_mfncurves(TRANSLATEALIASX))		return MS::kFailure;
+	if (MS::kSuccess != get_anim_layer_mfncurves(TRANSLATEALIASY))		return MS::kFailure;
+	if (MS::kSuccess != get_anim_layer_mfncurves(TRANSLATEALIASZ))		return MS::kFailure;
+	if (MS::kSuccess != get_anim_layer_mfncurves(ROTATEALIAS))			return MS::kFailure;
+
+	DEBUG_MSG_OUTPUT(" TEST OUTPUT OF ANIMLAYER CURVES: ");
+	for (int i = 0; i < anim_layer_curves_input.size(); i++) {
+		DEBUG_MSG_OUTPUT("string:");
+		DEBUG_MSG_OUTPUT(anim_layer_curves_input[i].first.c_str());
+		DEBUG_MSG_OUTPUT("anim curve name:");
+		DEBUG_MSG_OUTPUT(MFnAnimCurve(anim_layer_curves_input[i].second).absoluteName());
+	}
+	if (MS::kSuccess != get_anim_layer_keyframes())								return MS::kFailure;
+	auto timerange = get_operation_time_range();
+	DEBUG_MSG_OUTPUT("-----detected operational time range-----------");
+	DEBUG_MSG_OUTPUT(timerange.first);
+	DEBUG_MSG_OUTPUT(timerange.second);
+	if (MS::kSuccess != anim_layer_mute_attr(true))								return MS::kFailure;
+	if (MS::kSuccess != get_baked_transform(timerange.first, timerange.second))	return MS::kFailure;
+	if (MS::kSuccess != anim_layer_mute_attr(false))							return MS::kFailure;
+	
+	DEBUG_MSG_OUTPUT("-------------- BAKED KEYS ----------------");
+	for (int i = 0; i < 6; i++) {
+		DEBUG_MSG_OUTPUT(BakedTransformKeys[i].first.c_str());
+		DEBUG_MSG_OUTPUT(BakedTransformKeys[i].second);
+	};
+	
+	if (MS::kSuccess != generate_interpolation_for_curve (anim_layer_curves_input[0].first)) return MS::kFailure;
+	DEBUG_MSG_OUTPUT("----------interpolated additive keyframe (fake output so far)-------------------");
+	DEBUG_MSG_OUTPUT(interpolated_by_speed_keys[0]);
+
+
+	//  TODO:  check how to store and identify only active animation layer curves using std:set <MFnAnimCurve>  
+	// getting children of plug got from the animlayer
+	//DEBUG_MSG_OUTPUT("num of children:");
+	//DEBUG_MSG_OUTPUT(plugRotation.numChildren());
+	//for (int i = 0; i < plugRotation.numChildren(); i++)
+	//{
+	//	DEBUG_MSG_OUTPUT(plugRotation.child(i).name());
+	//}
+
+			/*  some map operational examples:  testmap.insert(pair<int, int>(1, 40));
+			 or std::map<char,int> mymap;  mymap.emplace('x',100);    mymap.find('x');
+			 */
+
+	return MS::kSuccess;
+}
+
+MStatus interpolationBySpeed::processing_arg_list (const MArgList& argList)
+{
 	MStatus stat = MS::kSuccess;
 	MArgDatabase argDB(syntax(), argList, &stat);
 	if (MS::kSuccess != stat)
@@ -327,18 +379,23 @@ MStatus interpolationBySpeed::initDataFromMaya(const MArgList& argList)
 		return MS::kFailure;
 	}
 
-	argDB.getFlagArgument(SOURCEOBJFLAG, 0, argObjName);   //to put here debug output msg
-	argDB.getFlagArgument(LAYERNAMEFLAG, 0, argLayerName); //to put here debug output msg
+	argDB.getFlagArgument(SOURCEOBJFLAG, 0, argObjName);   
+	argDB.getFlagArgument(LAYERNAMEFLAG, 0, argLayerName); 
+
 	DEBUG_MSG_OUTPUT(argObjName);
 	DEBUG_MSG_OUTPUT(argLayerName);
 
+	return MS::kSuccess;
+}
+MStatus interpolationBySpeed::get_obj_transform_node()
+{
 	//------------ Getting theTransform Node, named in first argument ------------------------------
 	MDagPath dagPath;                 //it's so complicated, to handle the outliner window selection
 	MSelectionList selList;
 	selList.add(argObjName);
 	selList.getDagPath(0, dagPath);
 	dagPath.extendToShape();
-	MFnDagNode dagNode(dagPath);  
+	MFnDagNode dagNode(dagPath);
 	uint parentsCount = dagNode.parentCount();
 	if (!parentsCount) {
 		MGlobal::displayError("interpolationBySpeed.mll: no transfrom node found for the specified object");
@@ -350,7 +407,13 @@ MStatus interpolationBySpeed::initDataFromMaya(const MArgList& argList)
 	DEBUG_MSG_OUTPUT("DEBUG: Object Transform Node Name =");
 	DEBUG_MSG_OUTPUT(MFnDependencyNode(nodeTransform).absoluteName());
 
+	return MS::kSuccess;
+}
+MStatus interpolationBySpeed::get_anim_layer_ctrl_node()
+{
 	//------------- Getting anmation Layer Node --------------------------------------------
+	MSelectionList selList;
+	MStatus stat = MS::kSuccess;
 	selList.clear();
 	selList.add(argLayerName);
 	stat = selList.getDependNode(0, nodeAnimLayerSettings);
@@ -360,27 +423,33 @@ MStatus interpolationBySpeed::initDataFromMaya(const MArgList& argList)
 		return stat.statusCode();
 	}
 	DEBUG_MSG_OUTPUT("DEBUG: anim layer node name = ");
-	DEBUG_MSG_OUTPUT(MFnDependencyNode (nodeAnimLayerSettings).absoluteName());
+	DEBUG_MSG_OUTPUT(MFnDependencyNode(nodeAnimLayerSettings).absoluteName());
 
+	return MS::kSuccess;
+}
+MStatus interpolationBySpeed::get_anim_layer_mfncurves(std::string transform_root)
+{
 	//-------------- Getting stack animation Curves in the animation layer ---------------
 	DEBUG_MSG_OUTPUT("-------------------------");
 	DEBUG_MSG_OUTPUT("-------------------------");
 	DEBUG_MSG_OUTPUT("DEBUG:  looking for animation curves...");
-	MString strLayerRotationNode = argObjName + ROTATEALIAS + argLayerName;
+	MString strLayerRotationNode = argObjName + transform_root.c_str() + argLayerName;
 	DEBUG_MSG_OUTPUT(strLayerRotationNode);
+	MSelectionList selList;
 	selList.clear();
 	selList.add(strLayerRotationNode);
 	MObject depNodeRotation;
-	selList.getDependNode(0,depNodeRotation);
-
+	selList.getDependNode(0, depNodeRotation);
 	// getting children of dependency node got from animlayer
 	DEBUG_MSG_OUTPUT("-------------------------");
 	MPlugArray animLayerPlugs;
 	MFnDependencyNode(depNodeRotation).getConnections(animLayerPlugs);
-	for (int i =0; i< animLayerPlugs.length(); i++)
-	{ 
+	std::stack <MObject> foundAnimCurves;   // ALL FOUND VALID ANIMCURVES ARE STORED HERE
+	MStatus curve_status;
+	for (uint i = 0; i < animLayerPlugs.length(); i++)
+	{
 		DEBUG_MSG_OUTPUT("connection name:");
-		DEBUG_MSG_OUTPUT(animLayerPlugs[i].name() );
+		DEBUG_MSG_OUTPUT(animLayerPlugs[i].name());
 		DEBUG_MSG_OUTPUT(" childrenNum()");
 		DEBUG_MSG_OUTPUT(animLayerPlugs[i].numChildren());
 		DEBUG_MSG_OUTPUT(" source or distanation:");
@@ -391,30 +460,167 @@ MStatus interpolationBySpeed::initDataFromMaya(const MArgList& argList)
 			DEBUG_MSG_OUTPUT("distanation plug name:");
 			MPlug plugOut = animLayerPlugs[i].sourceWithConversion();
 			DEBUG_MSG_OUTPUT(plugOut.name());
-			DEBUG_MSG_OUTPUT("node it belongs to:");
+			DEBUG_MSG_OUTPUT("node belongs to:");
 			MObject nodePlugOut = plugOut.node();
 			DEBUG_MSG_OUTPUT(MFnDependencyNode(nodePlugOut).absoluteName());
 			DEBUG_MSG_OUTPUT("anim curve status:");
-			MStatus stat2;
-			DEBUG_MSG_OUTPUT(MFnAnimCurve(nodePlugOut, &stat2).absoluteName());
-			DEBUG_MSG_OUTPUT(stat2);
-
+			MFnAnimCurve tryCurve (nodePlugOut, &curve_status); //update curve_status if nodePlugOut is a valid MFnAnimCurve
+			if (curve_status) foundAnimCurves.push(nodePlugOut);;
+			DEBUG_MSG_OUTPUT(MFnAnimCurve(nodePlugOut, &curve_status).absoluteName());
+			DEBUG_MSG_OUTPUT(curve_status);
 		}
 		DEBUG_MSG_OUTPUT("-------------------------");
-		
 	}
-
-	// getting children of plug got from the animlayer
-	//DEBUG_MSG_OUTPUT("num of children:");
-	//DEBUG_MSG_OUTPUT(plugRotation.numChildren());
-	//for (int i = 0; i < plugRotation.numChildren(); i++)
-	//{
-	//	DEBUG_MSG_OUTPUT(plugRotation.child(i).name());
-	//}
-
+	// Dirty HAck:  EXTRACTING ONLY LAST 3 ANIMCURVES  (temp hack until I will find better way to select curves that belong to current animlayer)
+	int DirtyHack = 1;
+	if (transform_root == ROTATEALIAS) DirtyHack = 3;
+	for (int i = 0; i < DirtyHack; i++)
+	{
+	// EXTRACTING ONLY LAST 3 ANIMCURVES  (temp hack until I will find better way to select curves that belong to current animlayer)
+		std::string strCurveName = MFnAnimCurve(foundAnimCurves.top(), &curve_status).absoluteName().asChar();
+		anim_layer_curves_input.push_back(std::make_pair(strCurveName, foundAnimCurves.top())); //std::pair<std::string, MObject>
+		foundAnimCurves.pop();
+	};
 
 
 	return MS::kSuccess;
 }
+MStatus interpolationBySpeed::anim_layer_mute_attr(bool mute_value)
+{
+	DEBUG_MSG_OUTPUT("------------anim layer ctrl attribute--------------");
+	MPlug muteAttrPlug = MFnDependencyNode(nodeAnimLayerSettings).findPlug("mute");
+	muteAttrPlug.setDouble(mute_value);
+	DEBUG_MSG_OUTPUT(muteAttrPlug.name());
+	DEBUG_MSG_OUTPUT(double(mute_value));
+
+	return MS::kSuccess;
+}
+MStatus interpolationBySpeed::get_baked_transform(double range_start, double range_end)
+{
+	MFnTransform bakedTransform(nodeTransform);
+	MEulerRotation currentEulerRotation;
+	MVector        currentPosition;
+	bakedTransform.getRotation(currentEulerRotation);
+	MAnimControl animControl;
+	std::queue <double> keys;
+	std::vector <std::string> baseTransformChannels = { "translateX", "translateY", "translateZ", "rotateX","rotateY","rotateZ" };
+	for (int i = 0; i < baseTransformChannels.size(); i++)  BakedTransformKeys.push_back(std::pair<std::string, std::queue <double>>(baseTransformChannels[i], keys)) ;
+
+	for (double i = range_start; i < range_end; i++)
+	{
+		animControl.setCurrentTime(MTime(i, MTIME_FPS));
+		currentPosition=bakedTransform.getTranslation(MSpace::kTransform);
+		bakedTransform.getRotation(currentEulerRotation);
+		//init class data storage
+		BakedTransformKeys[0].second.push(currentPosition[0]);
+		BakedTransformKeys[1].second.push(currentPosition[1]);
+		BakedTransformKeys[2].second.push(currentPosition[2]);
+		BakedTransformKeys[3].second.push(currentEulerRotation.x * RADIANCECOEF);
+		BakedTransformKeys[4].second.push(currentEulerRotation.y * RADIANCECOEF);
+		BakedTransformKeys[5].second.push(currentEulerRotation.z * RADIANCECOEF);
+
+	}
+	animControl.setCurrentTime(MTime(range_start, MTIME_FPS));
+
+	return MS::kSuccess;
+}
+MStatus interpolationBySpeed::get_anim_layer_keyframes()
+{
+	DEBUG_MSG_OUTPUT("-----------Number of Keyframes: ------------------");
+	for (int i = 0; i < 6; i++)
+	{
+		DEBUG_MSG_OUTPUT(anim_layer_curves_input[i].first.c_str());
+		MFnAnimCurve mFnAnimCurve_itter(anim_layer_curves_input[i].second);
+		uint numKeys = mFnAnimCurve_itter.numKeys();
+		DEBUG_MSG_OUTPUT(numKeys);
+
+		std::deque<std::pair<double, double>> one_curve_keyframes;
+		for (uint j=0;j<numKeys;j++)
+		{
+			MTime KeyframeTimeValue(0.0, MTIME_FPS);
+			KeyframeTimeValue = mFnAnimCurve_itter.time(j);  //24fps vs 30fps problem might be here
+			//KeyframeTimeValue.setUnit(MTIME_FPS);
+			one_curve_keyframes.push_back(std::make_pair(KeyframeTimeValue.value(), (mFnAnimCurve_itter.value(j)*RADIANCECOEF)));		
+		};
+		anim_layer_curves_keys.push_back(one_curve_keyframes);
+		DEBUG_MSG_OUTPUT("keyframes:");
+		// technique to go through std::deque with itterators
+		for (std::deque<std::pair<double, double>>::iterator itt = anim_layer_curves_keys[i].begin();
+			itt != anim_layer_curves_keys[i].end(); ++itt)
+		{
+			DEBUG_MSG_OUTPUT("key:");
+			DEBUG_MSG_OUTPUT(itt->first);
+			DEBUG_MSG_OUTPUT(itt->second);
+		}
 
 
+	};
+
+
+	return  MS::kSuccess;
+}
+std::pair<double,double> interpolationBySpeed::get_operation_time_range()
+{
+	std::set <double> border_keys;
+	for (int i = 0; i < 6; i++)
+	{
+		border_keys.insert(anim_layer_curves_keys[i].cbegin()->first);
+		border_keys.insert(std::prev(anim_layer_curves_keys[i].cend())->first);
+	};
+	double time_min = *border_keys.begin();
+	double time_max = *std::prev(border_keys.end());
+	return std::make_pair(time_min,time_max);
+}
+std::queue<double> interpolationBySpeed::process_interpolation_by_speed(std::queue<double>& transform_keys, std::pair<double, double>& interpolated_values, int range)
+{
+	// temp fake implementation:
+	std::queue<double> out_keys;
+	double tmp_difference_even_spread = (interpolated_values.second - interpolated_values.first)/range;
+	for (int i = 0; i < range; i++)
+	{
+		out_keys.push(interpolated_values.first + (tmp_difference_even_spread * i));
+	}
+
+	return out_keys;
+}
+MStatus interpolationBySpeed::generate_interpolation_for_curve(std::string& curve_name)
+{
+	uint curve_index = 0;
+	bool search_result = false;
+	for (uint i = 0; i < 6; i++)
+	{
+		if (anim_layer_curves_input[i].first == curve_name)
+		{
+			curve_index = i;
+			search_result = true;
+		}
+	}
+	if (search_result)
+	{
+		std::queue<std::pair<double, double>> output_keys;
+
+		MFnAnimCurve processing_curve (anim_layer_curves_input[curve_index].second);
+		std::pair<double, double> first_add_key = anim_layer_curves_keys[curve_index].front();
+		anim_layer_curves_keys[curve_index].pop_front();
+		std::pair<double, double> next_add_key = anim_layer_curves_keys[curve_index].front();
+		int range = int(next_add_key.first) - int(first_add_key.first);
+		std::queue<double> part_of_baked_keys;
+		for (int i = 0; i < range; i++)  // this part is a source of bugs when keyframes start not from the min time
+		{
+			part_of_baked_keys.push(BakedTransformKeys[curve_index].second.front());
+			BakedTransformKeys[curve_index].second.pop();
+		}
+		std::queue<double> interpolated_values = process_interpolation_by_speed(part_of_baked_keys, std::make_pair(first_add_key.second, next_add_key.second), range);
+		for (int i = 0; i < range; i++) 
+		{
+			output_keys.push(std::make_pair(double(int(first_add_key.first) + i), interpolated_values.front()));
+			interpolated_values.pop();
+		};
+		interpolated_by_speed_keys.push_back(output_keys);
+
+		return MStatus::kSuccess;
+	}
+	else
+		DEBUG_MSG_OUTPUT("ERROR: NO ANIMATION CURVE WITH PROVIDED NAME IN generate_interpolation_for_curve() found");
+		return MStatus::kFailure;
+}
